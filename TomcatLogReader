@@ -1,0 +1,88 @@
+# Configuration variables
+$tomcatLogsPath = "C:\path\to\tomcat\logs"
+$emailFrom = "sender@example.com"
+$emailTo = "recipient@example.com"
+$emailSubject = "Tomcat Server Start Status"
+$smtpServer = "smtp.example.com"
+$scanIntervalMinutes = 5
+
+# Function to send email notification
+function Send-EmailNotification {
+    param(
+        [string]$Message,
+        [string]$Status
+    )
+    
+    $body = @"
+Server Start Status: $Status
+
+Message:
+$Message
+"@
+    
+    $smtp = New-Object Net.Mail.SmtpClient($smtpServer)
+    $smtp.Send($emailFrom, $emailTo, $emailSubject, $body)
+}
+
+# Function to scan Tomcat logs and send notifications
+function Scan-TomcatLogs {
+    # Check if Tomcat logs directory exists
+    if (-not (Test-Path $tomcatLogsPath)) {
+        Write-Host "Tomcat logs directory does not exist."
+        Send-EmailNotification -Message "Tomcat logs directory does not exist." -Status "Error"
+        return
+    }
+
+    # Get the latest log file
+    $logFile = Get-ChildItem -Path $tomcatLogsPath -Filter "*.log" | Sort-Object -Property LastWriteTime -Descending | Select-Object -First 1
+
+    # Check if the log file exists
+    if (-not $logFile) {
+        Write-Host "No Tomcat log file found."
+        Send-EmailNotification -Message "No Tomcat log file found." -Status "Error"
+        return
+    }
+
+    # Read the log file
+    $logContent = Get-Content -Path $logFile.FullName -Tail 1000
+
+    # Check for errors or warnings
+    $errors = $logContent | Select-String -Pattern "ERROR"
+    $warnings = $logContent | Select-String -Pattern "WARN"
+
+    if ($errors) {
+        Write-Host "Errors found in the Tomcat log file:"
+        $errors | ForEach-Object {
+            Write-Host $_.Line
+        }
+        Send-EmailNotification -Message ($errors | Out-String) -Status "Error"
+    }
+    elseif ($warnings) {
+        Write-Host "Warnings found in the Tomcat log file:"
+        $warnings | ForEach-Object {
+            Write-Host $_.Line
+        }
+        Send-EmailNotification -Message ($warnings | Out-String) -Status "Warning"
+    }
+	# Check if the Tomcat server started successfully
+	elseif ($logContent -match "INFO: Server startup in") {
+		Write-Host "Tomcat server started successfully."
+		Send-EmailNotification -Message "Tomcat server started successfully." -Status "Success"
+	}
+    else {
+        Write-Host "No errors or warnings found in the Tomcat log file."
+        Send-EmailNotification -Message "No errors or warnings found in the Tomcat log file." -Status "Success"
+    }
+
+    # Check if the server is in a hung state
+    if ($logContent -match "SEVERE: The web application \[\w+\] appears to have started a thread named \[\w+\] but has failed to stop it.") {
+        Write-Host "The server is in a hung state."
+        Send-EmailNotification -Message "The server is in a hung state." -Status "Error"
+    }
+}
+
+# Infinite loop to scan Tomcat logs every specified interval
+while ($true) {
+    Scan-TomcatLogs
+    Start-Sleep -Seconds ($scanIntervalMinutes * 60)
+}
